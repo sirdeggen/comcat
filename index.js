@@ -1,5 +1,5 @@
 const bsv = require('bsv')
-const { KeyPair, Bn, Hash, Point, PubKey, Bsm, Address, PrivKey } = bsv
+const { KeyPair, Bn, Hash, Point, PubKey, Bsm, Address, PrivKey, Aescbc } = bsv
 const G = Point.getG()
 const N = Point.getN()
 
@@ -20,10 +20,10 @@ class ComCat {
         const { Message, m, mG } = this.newMessage(server)
         this.register[server] = { Message, m, mG }
         const MessageString = Message.toString()
-        console.log('Share message with the counterparty:\n', {
+        return {
             MessageString,
             pubKey: this.userKeyPair.pubKey.toString(),
-        })
+        }
     }
 
     acceptConnection(MessageString, pubKeyString, server = 'counterparty') {
@@ -32,7 +32,7 @@ class ComCat {
         const pubKey = PubKey.fromString(pubKeyString)
         pubKey.point = pubKey.point.add(mG)
         this.register[server] = { Message, m, mG, pubKey }
-        console.log('Share your pubKey with the counterparty:\n', this.userKeyPair.pubKey.toString())
+        return { pubKeyString: this.userKeyPair.pubKey.toString() }
     }
 
     storePubKey(pubKeyString, server = 'counterparty') {
@@ -46,7 +46,7 @@ class ComCat {
         const { Message, m } = this.register[server]
         const p = m.add(this.userKeyPair.privKey.bn).mod(N)
         const sig = Bsm.sign(Message, KeyPair.fromPrivKey(PrivKey.fromBn(p)))
-        console.log('Share your signature with the counterparty:\n', sig.toString())
+        return { sig: sig.toString() }
     }
 
     verifySignature(sig, server = 'counterparty') {
@@ -55,14 +55,36 @@ class ComCat {
         console.log({ valid })
         if (valid) {
             this.register[server].sig = sig
-            this.register[server].s = pubKey.point.mul(m.add(this.userKeyPair.privKey.bn).mod(N)).x
-            console.log({ s: this.register[server].s.toString() })
+            this.register[server].s = pubKey.point.mul(m.add(this.userKeyPair.privKey.bn).mod(N)).x.toBuffer()
+            console.log({ s: this.register[server].s.toString('hex') })
         }
     }
 
     calcS(server = 'counterparty') {
         const { pubKey, m } = this.register[server]
-        this.register[server].s = pubKey.point.mul(m.add(this.userKeyPair.privKey.bn).mod(N)).x
-        console.log({ s: this.register[server].s.toString() })
+        this.register[server].s = pubKey.point.mul(m.add(this.userKeyPair.privKey.bn).mod(N)).x.toBuffer()
+        console.log({ s: this.register[server].s.toString('hex') })
+    }
+
+    encryptMessage(message, server = 'counterparty') {
+        const messageBuf = Buffer.from(message)
+        const encrypted = Aescbc.encrypt(messageBuf, this.register[server].s)
+        return encrypted.toString('hex')
+    }
+
+    decryptMessage(encryptedMessage, server = 'counterparty') {
+        const encryptedMessageBuf = Buffer.from(encryptedMessage, 'hex')
+        const decrypted = Aescbc.decrypt(encryptedMessageBuf, this.register[server].s)
+        return decrypted.toString()
     }
 }
+
+const A = new ComCat()
+const B = new ComCat()
+
+const { MessageString, pubKey } = A.requestConnection()
+const { pubKeyString } = B.acceptConnection(MessageString, pubKey)
+A.storePubKey(pubKeyString)
+const { sig } = A.signMessage()
+B.verifySignature(sig)
+A.calcS()
